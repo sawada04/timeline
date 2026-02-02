@@ -1,1 +1,767 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>縦スクロール→横移動 年表（クリック中央寄せ＋マーカー＋L字線＋吹き出し）</title>
+  <style>
+    :root{
+      --gap: 90px;
+      --card-w: 420px;
+      --card-h: 76vh;
+      --pad: 26px;
+      --bg: #0f0f12;
+      --fg: #f2f2f2;
+      --muted: #b8b8b8;
+      --header-h: 64px;
+    }
+    *{ box-sizing:border-box; }
+    body{
+      margin:0;
+      font-family: system-ui, -apple-system, "Hiragino Kaku Gothic ProN", "Noto Sans JP", Segoe UI, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+    }
+    header{
+      position:fixed; left:0; top:0; right:0;
+      padding:14px 18px;
+      height: var(--header-h);
+      backdrop-filter: blur(10px);
+      background: rgba(15,15,18,0.65);
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      z-index:30;
+    }
+    header .title{ font-weight:700; font-size:14px; letter-spacing:.02em; }
+    header .hint{ font-size:12px; color:var(--muted); margin-top:4px; }
 
+    .scroll-section{ height: 400vh; } /* 初期値。JSで自動上書き */
+    .stage{
+      position: sticky;
+      top:0;
+      height:100vh;
+      overflow:hidden;
+      padding-top: var(--header-h);
+    }
+    .timeline{
+      position:absolute;
+      left:0;
+      top: var(--header-h);
+      height: calc(100vh - var(--header-h));
+      display:flex;
+      align-items:center;
+      gap: var(--gap);
+      padding: 0 var(--pad);
+      will-change: transform;
+    }
+
+    .era{
+      width: var(--card-w);
+      height: var(--card-h);
+      border-left: 1px solid rgba(255,255,255,0.22);
+      padding: 18px 18px 18px 22px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 10px;
+      box-shadow: 0 8px 26px rgba(0,0,0,0.28);
+      opacity: .62;
+      transition: opacity .18s ease, transform .18s ease, box-shadow .18s ease, outline-color .18s ease;
+      display:flex;
+      align-items:flex-start;
+      justify-content:flex-start;
+
+      writing-mode: vertical-rl;
+      text-orientation: mixed;
+      line-height: 1.75;
+      letter-spacing: .03em;
+
+      overflow: hidden; /* カード内スクロールしない */
+      cursor: pointer;
+      user-select: none;
+    }
+    .era:hover{
+      opacity: .82;
+      transform: translateY(-2px);
+    }
+    .era.active{
+      opacity: 1;
+      transform: translateY(-4px);
+      box-shadow: 0 16px 46px rgba(0,0,0,0.42);
+      outline: 2px solid rgba(255,255,255,0.18);
+      outline-offset: 2px;
+    }
+    .era strong{ font-size: 20px; letter-spacing: .06em; }
+    .era .meta{ color: var(--muted); font-size: 12px; }
+    .era .rule{ margin-top: 10px; padding-top: 10px; border-top: 1px solid rgba(255,255,255,0.14); }
+    .era .line{ margin-top: 6px; }
+
+    .fade-left,.fade-right{
+      position:fixed;
+      top: var(--header-h);
+      height: calc(100vh - var(--header-h));
+      width:80px;
+      pointer-events:none;
+      z-index:9;
+    }
+    .fade-left { left:0; background: linear-gradient(90deg, rgba(15,15,18,1), rgba(15,15,18,0)); }
+    .fade-right{ right:0; background: linear-gradient(270deg, rgba(15,15,18,1), rgba(15,15,18,0)); }
+
+    /* ===== 現在地（マーカー画像） ===== */
+    #yearMarker{
+      position: fixed;
+      left: 50%;
+      top: 80px;
+      width: 110px;
+      height: auto;
+      transform: translateX(-50%);
+      z-index: 22;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .12s ease;
+      filter: drop-shadow(0 10px 18px rgba(0,0,0,0.55));
+    }
+
+    /* ===== 吹き出し（漫画風：白背景＋黒フチ） ===== */
+    #markerBubble{
+      position: fixed;
+      z-index: 23;
+      max-width: min(340px, 78vw);
+      background: #ffffff;
+      color: #111;
+      border: 2px solid #111;
+      border-radius: 14px;
+      padding: 10px 12px;
+      box-shadow: 0 10px 24px rgba(0,0,0,0.35);
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .12s ease;
+      line-height: 1.5;
+      font-size: 13px;
+    }
+    #markerBubble .y{
+      display:inline-block;
+      font-weight: 800;
+      margin-right: 8px;
+      color: #111;
+    }
+    #markerBubble .t{ color:#111; }
+
+    /* しっぽ：黒フチ（::before）＋白塗り（::after）の二重構造 */
+    #markerBubble::before,
+    #markerBubble::after{
+      content:"";
+      position:absolute;
+      width:0; height:0;
+      border: 12px solid transparent;
+    }
+    /* 右配置（しっぽ左） */
+    #markerBubble.tail-left::before{
+      left: -26px; top: 18px;
+      border-right-color: #111;
+    }
+    #markerBubble.tail-left::after{
+      left: -22px; top: 18px;
+      border-right-color: #fff;
+    }
+    /* 左配置（しっぽ右） */
+    #markerBubble.tail-right::before{
+      right: -26px; top: 18px;
+      border-left-color: #111;
+    }
+    #markerBubble.tail-right::after{
+      right: -22px; top: 18px;
+      border-left-color: #fff;
+    }
+    /* 下配置（しっぽ上） */
+    #markerBubble.tail-up::before{
+      left: 18px; top: -26px;
+      border-bottom-color: #111;
+    }
+    #markerBubble.tail-up::after{
+      left: 18px; top: -22px;
+      border-bottom-color: #fff;
+    }
+    /* 上配置（しっぽ下） */
+    #markerBubble.tail-down::before{
+      left: 18px; bottom: -26px;
+      border-top-color: #111;
+    }
+    #markerBubble.tail-down::after{
+      left: 18px; bottom: -22px;
+      border-top-color: #fff;
+    }
+
+    /* ===== 接続線（SVG） ===== */
+    #markerOverlay{
+      position: fixed;
+      left: 0; top: 0;
+      width: 100vw;
+      height: 100vh;
+      z-index: 21; /* マーカー画像より下 */
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .12s ease;
+    }
+    #markerOverlay path{
+      fill: none;
+      stroke: rgba(255,255,255,0.22);
+      stroke-width: 3;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    #markerOverlay circle{
+      fill: rgba(255,255,255,0.22);
+    }
+
+    @media (max-width: 768px){
+      header{ position: static; height:auto; }
+      .fade-left,.fade-right{ display:none; }
+      #yearMarker, #markerBubble, #markerOverlay{ display:none; }
+
+      .scroll-section{ height:auto !important; }
+      .stage{ position:static; height:auto; padding-top:0; overflow:visible; }
+      .timeline{
+        position: static;
+        transform:none !important;
+        height:auto;
+        flex-direction:column;
+        align-items:stretch;
+        padding: 18px;
+        gap: 18px;
+      }
+      .era{
+        width:auto;
+        height:auto;
+        writing-mode: horizontal-tb;
+        padding: 18px;
+        overflow: visible;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <div class="title">あらゐけいいち略歴｜年ブロック（2006–2021）</div>
+    <div class="hint">カードをクリック→中央へ／マーカーは重なり回避／線はL字＆画像下部から／吹き出しは年別</div>
+  </header>
+
+  <!-- 画像は同じフォルダに marker.png -->
+  <img id="yearMarker" src="./marker.png" alt="marker" />
+
+  <div id="markerBubble" class="tail-left">
+    <span class="y"></span><span class="t"></span>
+  </div>
+
+  <svg id="markerOverlay" viewBox="0 0 100 100" preserveAspectRatio="none">
+    <path id="markerPath" d=""></path>
+    <circle id="markerDotA" cx="0" cy="0" r="4"></circle>
+    <circle id="markerDotB" cx="0" cy="0" r="4"></circle>
+  </svg>
+
+  <div class="fade-left"></div>
+  <div class="fade-right"></div>
+
+  <section class="scroll-section" id="scrollSection">
+    <div class="stage">
+      <div class="timeline" id="timeline">
+
+        <!-- 例：カードごとに直接コメントを書くなら data-comment="..." を追加（COMMENTSより優先） -->
+        <article class="era" data-year="2006"><div>
+          <strong>2006</strong><br><span class="meta">二〇〇六年（二十八歳）</span><div class="rule"></div>
+          <div class="line">一月　『カゼマチ』が『コミックフラッパー』に掲載、商業漫画誌デビューを果たす。</div>
+          <div class="line">二月　「日常」発表。</div>
+          <div class="line">三月　「日常」が第二十二回エース新人漫画賞奨励賞を受賞。「kumomadoriブログ」開設。</div>
+          <div class="line">五月　『月刊少年エース』誌上に『日常』の読み切り漫画シリーズが掲載開始。</div>
+          <div class="line">八月　「開けっ!」発表。「第二十四回エース新人漫画賞」広報絵担当。</div>
+          <div class="line">十一月　『日常』の正式な連載が決定する。この時期、東京都八王子市へと転居。新興社ホームページ「漫画製版の世界へようこそ!」挿絵担当、原稿提供協力。</div>
+        </div></article>
+
+        <article class="era" data-year="2007"><div>
+          <strong>2007</strong><br><span class="meta">二〇〇七年（二十九歳）</span><div class="rule"></div>
+          <div class="line">一月　『Fate/staynight』トリビュート絵「Fate/日常」寄稿。</div>
+          <div class="line">二月　『月刊コンプティーク』に『日常』出張連載開始。</div>
+          <div class="line">三月　『Fate/staynight』トリビュート漫画「Fate/Dailylife」寄稿。</div>
+          <div class="line">五月　「ほまれ」発表。</div>
+          <div class="line">七月　自身初となる単行本『日常』第一巻発売。『エースアサルト』に『日常』出張連載開始。</div>
+          <div class="line">八月　「あらゐとさわだのダイヤモンドサッカー1」挿絵担当。</div>
+          <div class="line">十月　『日常』単行本二巻発売、記念サイン会開催。</div>
+          <div class="line">十一月　「赤い車」フライヤーに漫画を寄稿。</div>
+        </div></article>
+
+        <article class="era" data-year="2008"><div>
+          <strong>2008</strong><br><span class="meta">二〇〇八年（三十歳）</span><div class="rule"></div>
+          <div class="line">二月　「幸せの角度(二〇〇八年度版)」を発表。</div>
+          <div class="line">三月　『月刊Newtype』にて『HelveticaStandard(商業版)』の連載開始。『ヤングアニマル』にて、『ふたりサッカー』の挿絵を担当。ツイッターアカウントを開設。ゲームコメンテーターサイト「besidegames」に記事投稿開始。</div>
+          <div class="line">五月　「世界の終わりで紅茶を一つ」表紙絵担当。</div>
+          <div class="line">七月　『日常』単行本三巻発売。</div>
+          <div class="line">八月　「線上の住人」表紙絵担当。十二月、「世界少女(デモテープ版)」ジャケット絵担当。</div>
+        </div></article>
+
+        <article class="era" data-year="2009"><div>
+          <strong>2009</strong><br><span class="meta">二〇〇九年（三十一歳）</span><div class="rule"></div>
+          <div class="line">一月　『日常』単行本四巻発売。</div>
+          <div class="line">二月　「ヒマラヤイルカ瓦版」発表。「サイレント・ハウス・ルール」表紙絵担当。</div>
+          <div class="line">六月　『コミックフラッパー』にピンナップポスター掲載。『ぱにぽに』に絵を寄稿。</div>
+          <div class="line">八月　『ティアズマガジン89』表紙絵担当。『HelveticaStandard』総集編発表。「ヒマラヤイルカ瓦版Vol.2」発表。「素晴らしいぜ世界」表紙絵担当。</div>
+          <div class="line">十月　『日常』単行本五巻発売、記念サイン会開催。『あずまんが大王』トリビュート漫画「リムジン」寄稿。『涼宮ハルヒの憂鬱』トリビュート絵寄稿。「アンジェリカ・イン・ザ・パスト」プロフィール絵担当。十二月「音ゼミVol.3」に出演、『変ゼミ。』トリビュート絵を寄稿。『宇宙賃貸サルガッ荘』トリビュート絵寄稿。</div>
+        </div></article>
+
+        <article class="era" data-year="2010"><div>
+          <strong>2010</strong><br><span class="meta">二〇一〇年（三十二歳）</span><div class="rule"></div>
+          <div class="line">四月　「ニュータイプロマンス編集戦国絵巻集」に絵を寄稿。</div>
+          <div class="line">五月　エッセイ本「記憶席」発表。ホームページ「kumomadori」開設。</div>
+          <div class="line">七月　『電撃大王ジェネシス』に読み切り漫画「幸せの角度(二〇一〇年版)」掲載。</div>
+          <div class="line">八月　『それでも町は廻っている』トリビュート漫画「ボコノン」寄稿。『まんがぶらふオリジナル』に「時定モノローグ戦」発表。</div>
+          <div class="line">十月　『ふたりサッカー』単行本一巻発売。</div>
+          <div class="line">十二月　『かりあげクン』トリビュート漫画「ほんにゃらゴッコ」寄稿。『はるみねーしょん』トリビュート絵寄稿。</div>
+        </div></article>
+
+        <article class="era" data-year="2011"><div>
+          <strong>2011</strong><br><span class="meta">二〇一一年（三十三歳）</span><div class="rule"></div>
+          <div class="line">二月　『究極超人あ~る』トリビュート絵寄稿。</div>
+          <div class="line">三月　『4コマnanoエース』にて『日常』出張連載開始。『日常』単行本六巻(限定版/通常版)発売。</div>
+          <div class="line">四月　アニメ版『日常』放映開始、構成協力、第二十六話脚本担当、提供バック絵描き下ろし。</div>
+          <div class="line">七月　PSP用ゲームソフト『日常(宇宙人)』発売。単行本『HelveticaStandard(商業52版)』発売。</div>
+          <div class="line">九月　『プチ・プロスフェール』表紙絵担当。</div>
+          <div class="line">十月　『日常』単行本七巻発売、記念サイン会開催。『木曜日のフルット』トリビュート絵寄稿。</div>
+          <div class="line">十一月　「星野源オフィシャルサイト」トップページ絵担当。『エピソード』に「星野さんと星野さんがよく描くネコみたいなもの」寄稿。『ふたりサッカー2試合目』発売。</div>
+        </div></article>
+
+        <article class="era" data-year="2012"><div>
+          <strong>2012</strong><br><span class="meta">二〇一二年（三十四歳）</span><div class="rule"></div>
+          <div class="line">一月　アニメ版『日常』がEテレにて再放送。</div>
+          <div class="line">二月　「トイズワークスコレクション日常のにいてんご」フィギュアデザイン原画担当。</div>
+          <div class="line">四月　「あらまさん28歳『ちばぎんカップ』を楽しむの巻き」発表。</div>
+          <div class="line">五月　「46spring1」発表。「春に咲く花の」表紙絵担当。「キミニトドケ」ジャケット絵担当。展覧会「ファミっていいとも!」にて絵を発表。</div>
+          <div class="line">六月　「角★コミ2012夏ご当地ポスター群馬県」の絵を担当。</div>
+          <div class="line">七月　「月光密造の夜Vol.3」缶バッヂ、ジャケット裏絵を担当。トークイベント「「日常」の作者が語る漫画家の日常」に出演。映画『シャーク・ナイト』宣伝絵を担当。</div>
+          <div class="line">十月　『日常』単行本八巻発売。ウェブ番組「日常のUstream」応援メッセージイラスト提供。</div>
+          <div class="line">十一月　『金曜のバカ』表紙絵担当。十二月、「藤子不二雄Aサイン会&amp;トークショー」にて、対談相手としてゲスト出演。『まんが道』宣伝店頭ポップ用絵担当。</div>
+        </div></article>
+
+        <article class="era" data-year="2013"><div>
+          <strong>2013</strong><br><span class="meta">二〇一三年（三十五歳）</span><div class="rule"></div>
+          <div class="line">一月　『月刊Newtype』にて『天国』連載開始。『まんが道』に寄せたエッセイ「まんが道と」発表。</div>
+          <div class="line">三月　「烏賊川市シリーズ」表紙絵を担当開始。</div>
+          <div class="line">四月　『わくわくろっこモーション』トリビュート絵寄稿。『恋愛怪談サヨコさん』トリビュート絵寄稿。『愛...しりそめし頃に...』完結直前記念メッセージ文寄稿。</div>
+          <div class="line">五月　「STRANGER」ペーパーに「星野源お見舞いマンガ」寄稿。展覧会「Cats’Issue」にて絵を発表。</div>
+          <div class="line">六月　「Z/Xスケジュールチェッカー」壁紙絵を担当。『体感する数学』表紙絵担当。「角★コミ2013夏販促ポスター」の絵を担当。タンブラー開設。</div>
+          <div class="line">十月　母校の荒子小学校の創立一四〇周年イベント「夢!チャレンジ!」にて講演。</div>
+          <div class="line">十一月　『ふたりサッカー』特別編「ほぼブラジル」掲載開始。</div>
+          <div class="line">十二月　『日常』単行本九巻発売、翌月に記念サイン会開催。</div>
+        </div></article>
+
+        <article class="era" data-year="2014"><div>
+          <strong>2014</strong><br><span class="meta">二〇一四年（三十六歳）</span><div class="rule"></div>
+          <div class="line">一月　『リケジョ!』表紙絵担当。</div>
+          <div class="line">二月　「46spring2」を発表。「どうしてまんがなの?」表紙絵担当。『日常』ノベライズ本『日常の夏休み』表紙絵・挿絵を担当。</div>
+          <div class="line">三月　『きまぐれロボット』表紙絵担当。</div>
+          <div class="line">四月　『体感する宇宙』表紙絵担当。</div>
+          <div class="line">六月　「第二十四回ぐんま県民マラソン」ポスター絵公開。</div>
+          <div class="line">九月　『GLAYEXPO2014』パンフレットに「ハワイ」寄稿。</div>
+          <div class="line">十月　「少年エース20周年記念」絵を描き下ろし。</div>
+          <div class="line">十一月　『クイズRPG魔法使いと黒猫のウィズ』に寄稿。『HelveticaStandard絵』単行本発売。</div>
+        </div></article>
+
+        <article class="era" data-year="2015"><div>
+          <strong>2015</strong><br><span class="meta">二〇一五年（三十七歳）</span><div class="rule"></div>
+          <div class="line">二月　LINEスタンプ「あらゐけいいちのスタンプ」販売開始。</div>
+          <div class="line">三月　『日常』が「SUGOIJAPANAward」マンガ部門で六位獲得。『放課後のプレアデス』トリビュート絵寄稿。</div>
+          <div class="line">五月　『ウルトラマン』トリビュート絵寄稿。六月、「メカトロウィーゴ」シリーズ絵担当開始。</div>
+          <div class="line">八月　「SAMEポスター」「ステッカー」「マグカップ」を限定販売。</div>
+          <div class="line">十一月　『忍者ハットリくん』トリビュート絵を寄稿。</div>
+          <div class="line">十二月　『日常』連載終了。最終巻十巻(特装版/通常版)が発売。動画「web日常10巻告知漫画」公開。「メカトロウィーゴパッケージイラスト回顧録」発表。</div>
+        </div></article>
+
+        <article class="era" data-year="2016"><div>
+          <strong>2016</strong><br><span class="meta">二〇一六年（三十八歳）</span><div class="rule"></div>
+          <div class="line">一月　「マルマン日常おえかきキャンペーン」キャンペーン絵、コラボスケッチブック表紙絵担当。</div>
+          <div class="line">二月　「みんなのメカトロウィーゴ4」開催告知絵担当。</div>
+          <div class="line">三月　高橋名人トリビュート漫画「名人との思い出」寄稿。</div>
+          <div class="line">八月　『もじのみほん2.0』宣伝絵担当。</div>
+          <div class="line">九月　『週刊モーニング』誌上に『CITY』連載開始。十二月、「ぬいぐるみメカトロウィーゴBIGサイズ」購入特典カレンダーポスター絵担当。</div>
+        </div></article>
+
+        <article class="era" data-year="2017"><div>
+          <strong>2017</strong><br><span class="meta">二〇一七年（三十九歳）</span><div class="rule"></div>
+          <div class="line">二月　『ココハナ』に「デスク周りキュン。」発表。</div>
+          <div class="line">三・四月　『CITY』単行本一~二巻発売、記念サイン会開催。</div>
+          <div class="line">三月　方倉陽二のトリビュート絵を寄稿。「雲間鳥瓦版1号」ネットプリント配信。「吉田尚記のコミパラ!」にてゲスト出演。</div>
+          <div class="line">七月　『CITY』が「第三回次にくるマンガ大賞」コミックス部門にノミネート。</div>
+          <div class="line">八月　『CITY』が「上半期コミック第一巻売上ランキング」第二位に選出。「ジュンク堂書店池袋本店20周年企画『私と池袋本店』」直筆ポップ絵展示。</div>
+          <div class="line">九月　『CITY』単行本三巻発売。</div>
+          <div class="line">十二月　ナタリーストアにて『CITY』グッズ販売。『コードギアス反逆のルルーシュ』トリビュート絵寄稿。</div>
+        </div></article>
+
+        <article class="era" data-year="2018"><div>
+          <strong>2018</strong><br><span class="meta">二〇一八年（四十歳）</span><div class="rule"></div>
+          <div class="line">一月　アニメ版『日常』声優・川原慶久と佐土原かおりの結婚式にウェルカムボードを寄贈。</div>
+          <div class="line">三月　『CITY』単行本四巻発売。</div>
+          <div class="line">七月　『CITY』単行本五巻発売。</div>
+          <div class="line">十一月　『CITY』単行本六巻発売。『オトナのストレッチマン』トリビュート絵寄稿。この時期、東京都練馬区へと転居。</div>
+        </div></article>
+
+        <article class="era" data-year="2019"><div>
+          <strong>2019</strong><br><span class="meta">二〇一九年（四十一歳）</span><div class="rule"></div>
+          <div class="line">一月　『にじさんじのくじじゅうじ』トリビュート絵を寄稿。</div>
+          <div class="line">二月　『大樹海のモンスターパートナー~浄化スキルで魔物保護生活~』トリビュート絵を寄稿。</div>
+          <div class="line">三月　『CITY』単行本七巻発売。五月、『CONTINUE』にて「千年王国」掲載。</div>
+          <div class="line">六月　『100億人のヨリコさん』表紙絵担当。</div>
+          <div class="line">七月　『CITY』単行本八巻発売、翌月記念サイン会開催。</div>
+          <div class="line">八月　伊勢崎商業高校百周年記念絵「まーきゅん」発表、メッセージ文を在校生に配布。</div>
+          <div class="line">十月　フィギュア「あらゐけいいちの立体」販売。LINEスタンプ「あらゐけいいちのスタンプ2」販売。</div>
+          <div class="line">十一月　『CITY』単行本九巻発売。</div>
+          <div class="line">十二月　「まんだらけコンプレックス」コラボグッズ販売、個展「あらゐけいいちの机の上にあった紙展」開催。『アリスと蔵六』カバー裏絵寄稿。</div>
+        </div></article>
+
+        <article class="era" data-year="2020"><div>
+          <strong>2020</strong><br><span class="meta">二〇二〇年（四十二歳）</span><div class="rule"></div>
+          <div class="line">二月　『化物語』トリビュート絵寄稿。</div>
+          <div class="line">三月　『CITY』単行本十巻発売。</div>
+          <div class="line">三月　石尊山観音寺の御朱印帳表紙絵を担当。『人間たちの話』表紙絵を担当。</div>
+          <div class="line">四月　SUZURIにて各種グッズ販売開始。</div>
+          <div class="line">五月　動画「邂逅」「捨鉢」を公開。</div>
+          <div class="line">六月　『Pollyanna』に「MOTHER」を掲載。</div>
+          <div class="line">七月　「あらい内科・脳神経クリニック」マスコット絵担当。クリエイター・もにゃゐずみのツイッターアカウント用アイコン提供。</div>
+          <div class="line">八月　『CITY』単行本十一巻発売。動画「絵描きうた」公開。九月、「コミティア―マンガの未来のために今できること」に応援メッセージ文寄稿。</div>
+          <div class="line">十一月　『CITY』単行本十二巻発売。『自分たちのコミティア』表紙絵担当、漫画「コミティア」寄稿。</div>
+          <div class="line">十二月　「メカトロウィーゴ×ヱヴァコラボ」企画キャラクター絵担当開始。</div>
+        </div></article>
+
+        <article class="era" data-year="2021"><div>
+          <strong>2021</strong><br><span class="meta">二〇二一年（四十三歳）</span><div class="rule"></div>
+          <div class="line">一月　動画「年賀状2021(無限正月)」公開。「モーニング・ショート漫画大賞」特別審査員を担当。</div>
+          <div class="line">三月　動画「丑三つ時の雨宮さん」公開。</div>
+          <div class="line">四月　『CITY』連載終了、最終巻十三巻発売。動画「新学期の雨宮さん」公開。ウェブ漫画『HelveticaStandardnote』更新開始。</div>
+          <div class="line">六月　『よるはまわるよ』放送動画を担当。「コミティア魂」題字担当。</div>
+          <div class="line">七月　SUZURI広告動画担当。『ライティングの哲学』表紙絵担当。</div>
+          <div class="line">八月　「時間旅行DJ和のあの頃アニソンMIX』ジャケット絵担当。「日常ツッコミかるた」発売。動画「雨宮さんとドクロのうた」公開。</div>
+          <div class="line">九月　『ゲッサン』にて『雨宮さん』連載開始。「だいわ文庫図書カード」キャンペーン絵担当。</div>
+          <div class="line">十一月　&quot;nichijou15thanniversarybox set&quot;発売予定。</div>
+        </div></article>
+
+        <article class="era" data-year="END"><div>
+          <strong>END</strong><br><span class="meta">2006–2021</span><div class="rule"></div>
+          ここで止まる。<br>でも年表は、まだ先へ伸びる。
+        </div></article>
+
+      </div>
+    </div>
+  </section>
+
+  <script>
+    (function () {
+      const section = document.getElementById('scrollSection');
+      const timeline = document.getElementById('timeline');
+      const cards = Array.from(timeline.querySelectorAll('.era'));
+
+      const marker = document.getElementById('yearMarker');
+      const bubble = document.getElementById('markerBubble');
+
+      const overlay = document.getElementById('markerOverlay');
+      const pathEl = document.getElementById('markerPath');
+      const dotA = document.getElementById('markerDotA');
+      const dotB = document.getElementById('markerDotB');
+
+      // ===== 年ごとの吹き出し文（ここを編集） =====
+      const COMMENTS = {
+        "2006": "商業デビューと『日常』の始動。ギアが入る年。",
+        "2007": "単行本1巻、外部寄稿も増えて「活動の幅」が伸びる。",
+        "2008": "連載・寄稿・SNS開始。動線が一気に太くなる。",
+        "2009": "作品数も接点も増加。『日常』5巻あたりの熱量。",
+        "2010": "エッセイやHP開設、寄稿も継続。表現の媒体が広がる。",
+        "2011": "アニメ化で世界が変わる年。制作にも深く関わる。",
+        "2012": "イベント・表紙・トーク…露出と表現が多層化。",
+        "2013": "連載『天国』や講演など、活動の“場”が多様に。",
+        "2014": "表紙・寄稿が太い。外部案件の密度が高い。",
+        "2015": "『日常』完結。ひとつの時代の区切り。",
+        "2016": "『CITY』開始。新しいフェーズへの移行。",
+        "2017": "『CITY』単行本＆評価の年。ノミネートや企画も。",
+        "2018": "転居も含めて節目。制作と生活が並走してる感じ。",
+        "2019": "個展や立体、グッズ…「紙」以外も強い年。",
+        "2020": "動画・SUZURI・応援メッセージ。アウトプット形が多彩。",
+        "2021": "連載終了と新連載開始。次へ渡す年。",
+        "END":  "ここから先は、あなたの年表で続けよう。"
+      };
+
+      let maxX = 0;
+      let selectedCard = null;
+
+      // 直近の矩形（線描画用）
+      let lastMarkerBox = null;
+      let lastCardBox = null;
+
+      function clamp(v, min, max) { return Math.max(min, Math.min(max, v)); }
+      function intersects(a, b) {
+        return !(a.right < b.left || a.left > b.right || a.bottom < b.top || a.top > b.bottom);
+      }
+
+      function compute() {
+        const viewportW = window.innerWidth;
+        maxX = Math.max(0, timeline.scrollWidth - viewportW);
+        const buffer = window.innerHeight * 1.1;
+        section.style.height = (maxX + buffer) + 'px';
+        overlay.setAttribute('viewBox', `0 0 ${window.innerWidth} ${window.innerHeight}`);
+      }
+
+      function getSectionTopY() {
+        const rect = section.getBoundingClientRect();
+        return rect.top + window.scrollY;
+      }
+      function getProgressX() {
+        const rect = section.getBoundingClientRect();
+        return Math.max(0, -rect.top);
+      }
+
+      function getYear(card){ return card?.dataset?.year || ""; }
+
+      function getCommentFor(card){
+        if (!card) return "";
+        const y = getYear(card);
+        const direct = card.getAttribute("data-comment");
+        return (direct && direct.trim()) ? direct.trim() : (COMMENTS[y] || "");
+      }
+
+      // ===== L字（折れ線）を引く：始点は「画像下部中央」に固定 =====
+      function updateLPath() {
+        if (!selectedCard || !lastMarkerBox || !lastCardBox) {
+          overlay.style.opacity = '0';
+          pathEl.setAttribute('d', '');
+          return;
+        }
+
+        if (intersects(lastMarkerBox, lastCardBox)) {
+          overlay.style.opacity = '0';
+          pathEl.setAttribute('d', '');
+          return;
+        }
+
+        // ★始点A：画像（マーカー）の下部中央
+        const ax = (lastMarkerBox.left + lastMarkerBox.right) / 2;
+        const ay = lastMarkerBox.bottom;
+
+        // 終点B：カード側（近い面）
+        let bx, by;
+
+        if (lastMarkerBox.bottom < lastCardBox.top) {
+          // markerが上
+          bx = (lastCardBox.left + lastCardBox.right) / 2;
+          by = lastCardBox.top;
+        } else if (lastMarkerBox.top > lastCardBox.bottom) {
+          // markerが下
+          bx = (lastCardBox.left + lastCardBox.right) / 2;
+          by = lastCardBox.bottom;
+        } else if (lastMarkerBox.right < lastCardBox.left) {
+          // markerが左
+          bx = lastCardBox.left;
+          by = (lastCardBox.top + lastCardBox.bottom) / 2;
+        } else {
+          // markerが右
+          bx = lastCardBox.right;
+          by = (lastCardBox.top + lastCardBox.bottom) / 2;
+        }
+
+        // 曲がり角：基本は (ax, by)（縦→横っぽい）
+        const elbow1 = { x: ax, y: by };
+        const elbow2 = { x: bx, y: ay };
+        const inView = (p) =>
+          p.x >= -40 && p.x <= window.innerWidth + 40 &&
+          p.y >= -40 && p.y <= window.innerHeight + 40;
+
+        const elbow = (inView(elbow1) || !inView(elbow2)) ? elbow1 : elbow2;
+
+        const d = `M ${ax} ${ay} L ${elbow.x} ${elbow.y} L ${bx} ${by}`;
+        pathEl.setAttribute('d', d);
+
+        dotA.setAttribute('cx', ax); dotA.setAttribute('cy', ay);
+        dotB.setAttribute('cx', bx); dotB.setAttribute('cy', by);
+
+        overlay.style.opacity = '1';
+      }
+
+      // ===== 吹き出しをマーカー付近に配置（カードと重なりにくく） =====
+      function updateBubblePosition(cardRect) {
+        if (!selectedCard) {
+          bubble.style.opacity = '0';
+          bubble.classList.remove('tail-left','tail-right','tail-up','tail-down');
+          return;
+        }
+
+        const mr = marker.getBoundingClientRect();
+        const br0 = bubble.getBoundingClientRect();
+        const bw = br0.width  || 260;
+        const bh = br0.height || 60;
+
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+        const headerSafeTop = 70;
+        const gap = 10;
+
+        const candidates = [
+          { left: mr.right + gap, top: mr.top + 10, tail: 'tail-left' }, // 右
+          { left: mr.left - bw - gap, top: mr.top + 10, tail: 'tail-right' }, // 左
+          { left: mr.left + 10, top: mr.bottom + gap, tail: 'tail-up' }, // 下
+          { left: mr.left + 10, top: mr.top - bh - gap, tail: 'tail-down' }, // 上
+        ];
+
+        const cardBox = cardRect ? {
+          left: cardRect.left, top: cardRect.top, right: cardRect.right, bottom: cardRect.bottom
+        } : null;
+
+        let chosen = null;
+        for (const c of candidates) {
+          const left = clamp(c.left, 8, vw - bw - 8);
+          const top  = clamp(c.top, headerSafeTop, vh - bh - 8);
+
+          const bb = { left, top, right: left + bw, bottom: top + bh };
+          if (cardBox && intersects(bb, cardBox)) continue;
+          chosen = { left, top, tail: c.tail };
+          break;
+        }
+        if (!chosen) {
+          chosen = { left: clamp(mr.right + gap, 8, vw - bw - 8), top: clamp(mr.top, headerSafeTop, vh - bh - 8), tail: 'tail-left' };
+        }
+
+        bubble.style.left = `${chosen.left}px`;
+        bubble.style.top  = `${chosen.top}px`;
+
+        bubble.classList.remove('tail-left','tail-right','tail-up','tail-down');
+        bubble.classList.add(chosen.tail);
+
+        bubble.style.opacity = '1';
+      }
+
+      // ===== マーカーをカードと重ならない位置へ（自動回避） =====
+      function updateMarkerAndUI() {
+        if (!selectedCard) {
+          marker.style.opacity = '0';
+          bubble.style.opacity = '0';
+          overlay.style.opacity = '0';
+          lastMarkerBox = null;
+          lastCardBox = null;
+          return;
+        }
+
+        const cardR = selectedCard.getBoundingClientRect();
+
+        // 吹き出し内容
+        const y = getYear(selectedCard);
+        const comment = getCommentFor(selectedCard);
+        bubble.querySelector('.y').textContent = y ? `${y}` : "";
+        bubble.querySelector('.t').textContent = comment || "";
+
+        // markerサイズ（ロード前フォールバック）
+        const mr0 = marker.getBoundingClientRect();
+        const mw = mr0.width  || 110;
+        const mh = mr0.height || 110;
+
+        const headerSafeTop = 70;
+        const gap = 12;
+        const vw = window.innerWidth;
+        const vh = window.innerHeight;
+
+        const cx = cardR.left + cardR.width / 2;
+
+        const candidates = [
+          { left: cx - mw / 2, top: cardR.top - mh - gap },           // 上
+          { left: cx - mw / 2, top: cardR.bottom + gap },             // 下
+          { left: cardR.left - mw - gap, top: cardR.top - mh - gap }, // 左上
+          { left: cardR.right + gap, top: cardR.top - mh - gap },     // 右上
+          { left: cardR.left - mw - gap, top: cardR.top + (cardR.height - mh) / 2 }, // 左中
+          { left: cardR.right + gap, top: cardR.top + (cardR.height - mh) / 2 },     // 右中
+        ];
+
+        const cardBox = { left: cardR.left, top: cardR.top, right: cardR.right, bottom: cardR.bottom };
+
+        let chosen = null;
+
+        for (const c of candidates) {
+          const left = clamp(c.left, 8, vw - mw - 8);
+          const top  = clamp(c.top, headerSafeTop, vh - mh - 8);
+
+          const markerBox = { left, top, right: left + mw, bottom: top + mh };
+          if (!intersects(markerBox, cardBox)) {
+            chosen = { left, top, markerBox };
+            break;
+          }
+        }
+
+        // 保険：左へ、無理なら右へ
+        if (!chosen) {
+          const safeTop = clamp(cardR.top - mh - gap, headerSafeTop, vh - mh - 8);
+          let safeLeft = clamp(cardR.left - mw - gap, 8, vw - mw - 8);
+          if (safeLeft === 8) safeLeft = clamp(cardR.right + gap, 8, vw - mw - 8);
+          const markerBox = { left: safeLeft, top: safeTop, right: safeLeft + mw, bottom: safeTop + mh };
+          chosen = { left: safeLeft, top: safeTop, markerBox };
+        }
+
+        // marker設置（中心xで渡す）
+        marker.style.left = `${chosen.left + mw / 2}px`;
+        marker.style.top  = `${chosen.top}px`;
+        marker.style.opacity = '1';
+
+        lastMarkerBox = chosen.markerBox;
+        lastCardBox = cardBox;
+
+        // UI追従
+        updateLPath();
+        updateBubblePosition(cardR);
+      }
+
+      function onScroll() {
+        const x = Math.min(getProgressX(), maxX);
+        timeline.style.transform = `translate3d(${-x}px, 0, 0)`;
+        updateMarkerAndUI();
+      }
+
+      function clearActive() { cards.forEach(c => c.classList.remove('active')); }
+      function setActive(card) { clearActive(); if (card) card.classList.add('active'); }
+
+      function centerCard(card) {
+        const cardCenter = card.offsetLeft + card.offsetWidth / 2;
+        const desiredX = Math.max(0, Math.min(maxX, cardCenter - window.innerWidth / 2));
+        const targetY = getSectionTopY() + desiredX;
+        window.scrollTo({ top: targetY, behavior: 'smooth' });
+      }
+
+      // クリック：選択＆中央寄せ（トグル）
+      cards.forEach(card => {
+        card.addEventListener('click', (e) => {
+          e.stopPropagation();
+
+          if (selectedCard === card) {
+            selectedCard = null;
+            clearActive();
+            updateMarkerAndUI();
+            return;
+          }
+
+          selectedCard = card;
+          setActive(card);
+          centerCard(card);
+
+          // smooth中の揺れ対策
+          setTimeout(updateMarkerAndUI, 60);
+          setTimeout(updateMarkerAndUI, 180);
+          setTimeout(updateMarkerAndUI, 360);
+        });
+      });
+
+      // 背景クリックで解除
+      document.addEventListener('click', () => {
+        selectedCard = null;
+        clearActive();
+        updateMarkerAndUI();
+      });
+
+      // マーカー画像ロード後に再計算
+      marker.addEventListener('load', () => updateMarkerAndUI());
+
+      compute();
+      onScroll();
+
+      window.addEventListener('resize', () => { compute(); onScroll(); }, { passive: true });
+      window.addEventListener('scroll', onScroll, { passive: true });
+    })();
+  </script>
+</body>
+</html>
